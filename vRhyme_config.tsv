@@ -1,0 +1,4 @@
+input	bam
+data/EPR/EPR_4281-140.phages_combined.fna	data/EPR/bamfiles/EPR_4281-140_SRR7968104_trim.sorted.bam,data/EPR/bamfiles/EPR_4281-140_SRR8439171_trim.sorted.bam
+data/EPR/EPR_PIR-30.phages_combined.fna	data/EPR/bamfiles/EPR_PIR-30_SRR7968104_trim.sorted.bam,data/EPR/bamfiles/EPR_PIR-30_SRR8439171_trim.sorted.bam
+data/Guaymas/Guaymas_4559-240.phages_combined.fna	data/Guaymas/bamfiles/Guaymas_4559-240_SRR7968106_trim.sorted.bam,data/Guaymas/bamfiles/Guaymas_4559-240_SRR7968107_trim.sorted.bam,data/Guaymas/bamfiles/Guaymas_4559-240_SRR7968109_trim.sorted.bam,data/Guaymas/bamfiles/Guaymas_4559-240_SRR7968125_trim.sorted.bam
