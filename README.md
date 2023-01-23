@@ -12,8 +12,8 @@ pyapply.py MAPFILE EXEC -v{VARARGS} -c CONSTARGS
 
 ## Variable args
 Variable arguments get changed each time the `EXEC` is ran. For example, these could specify different input files to run `EXEC` on. Variable arguments must take the form of `-v{VARARGS}` with no space. This syntax specifies two things:
-  1. What flag in the executable does this apply to
-  2. What column in the `MAPFILE` has the actual values there.
+  1. What flag in the executable does this apply to (`-v` in this case)
+  2. What column in the `MAPFILE` has the actual values there (`VARARGS` in this case).
 
 Suppose that our `MAPFILE` looks like this:
 ```
