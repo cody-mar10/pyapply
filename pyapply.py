@@ -33,7 +33,7 @@ def read_mapfile(mapfile: str) -> DefaultDict[str, List[str]]:
         for line in fp:
             values = line.rstrip().split("\t")
             for column, value in zip(header, values):
-                vararg_map[column].append(value.replace(",", " "))
+                vararg_map[column].append(value)
     return vararg_map
 
 
@@ -80,29 +80,55 @@ def map_headers_to_flag(varargs: List[str]) -> Dict[str, str]:
     return column2flag
 
 
-def main(mapfile: str, cmd: str, args: List[str]):
-    # [X] 0) setup command line parsing
-    # [X] 1) prepare arguments for cmd
-    # [X] 1a) read config file
-    # [X] 1b) break args into varargs and constargs
+def get_commands_list(
+    vararg_map: DefaultDict[str, List[str]],
+    constargs: List[str],
+    column2flag: Dict[str, str],
+) -> List[List[str]]:
+    """Given a list of `constargs`, the variable arguments map dictionary,
+    and a map from the variable args header names to the specific flags,
+    put all flags and arguments into a single object to group each
+    command instance together.
 
+    Args:
+        vararg_map (DefaultDict[str, List[str]]): variable arg name mapped to a list of all
+            values for that specific arg. Each item in the list represents a single
+        constargs (List[str]): list of all constant args, prepended with the executable name or path
+        column2flag (Dict[str, str]): maps column name in `mapfile` to the corresponding
+            flag for the command/executable
+
+    Returns:
+        List[List[str]]: list of commands where each item is a commands
+            list that can be passed directly to `subprocess.run`
+    """
+    commands = defaultdict(lambda: constargs.copy())
+    for colname, values in vararg_map.items():
+        flag = column2flag[colname]
+        for idx, value in enumerate(values):
+            value = value.split(",")
+            commands[idx].append(flag)
+            commands[idx].extend(value)
+
+    return list(commands.values())
+
+
+def main(mapfile: str, cmd: str, args: List[str]):
     vararg_map = read_mapfile(mapfile)
     varargs, constargs = split_args(args)
+
+    constargs.insert(0, cmd)
 
     if len(vararg_map) != len(varargs):
         raise RuntimeError(
             "Number of variable args passed does not equal the number of columns in the mapfile."
         )
 
-    # [X] 1c) mapping variable args to values in config file
     column2flag = map_headers_to_flag(varargs)
+    commands = get_commands_list(vararg_map, constargs, column2flag)
 
-    # 2) pass all args to the cmd
-    # TODO: figure out how run the vrhyme commands using a loop
-
-    # ie the FIRST command should look like this:
-    # COMMAND = "vRhyme -i data/EPR/EPR_4281-140.phages_combined.fna -b data/EPR/bamfiles/EPR_4281-140_SRR7968104_trim.sorted.bam data/EPR/bamfiles/EPR_4281-140_SRR8439171_trim.sorted.bam -t 10"
-    # subprocess.run(COMMAND)
+    for command in commands:
+        print(" ".join(command))
+        subprocess.run(command)
 
     ### OPTIONAL
     # 3) log all the commands that actually get ran
@@ -110,7 +136,6 @@ def main(mapfile: str, cmd: str, args: List[str]):
     # 4a) subset is to parallelize with jobs that don't already do multiprocessing
     # 5) make a config file maker
     # 5a) can unpack wildcards with pathlib or glob
-    pass
 
 
 # were running this script from the command line
@@ -143,5 +168,4 @@ if __name__ == "__main__":
     parser.add_argument("cmd", help="path to an executable")
 
     config, args = parser.parse_known_args()
-    print(config, args)
     main(mapfile=config.mapfile, cmd=config.cmd, args=args)
