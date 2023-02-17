@@ -1,4 +1,4 @@
 data
 build
-src/*.egg_info
+src/*.egg-info
 test*
