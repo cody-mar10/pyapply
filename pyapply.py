@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 import argparse
+import logging
+import multiprocessing
+import os
 import subprocess
 from collections import defaultdict
-from typing import List, DefaultDict, Dict, Tuple
+from typing import DefaultDict, Dict, List, Tuple
 
 
 def read_mapfile(mapfile: str) -> DefaultDict[str, List[str]]:
@@ -27,6 +30,7 @@ def read_mapfile(mapfile: str) -> DefaultDict[str, List[str]]:
         DefaultDict[str, List[str]]: variable arg name mapped to a list of all
             values for that specific arg. Each item in the list represents a single
     """
+    logging.info(f"Reading mapfile: {mapfile}")
     with open(mapfile) as fp:
         header = fp.readline().rstrip().split("\t")
         vararg_map: DefaultDict[str, List[str]] = defaultdict(list)
@@ -112,26 +116,57 @@ def get_commands_list(
     return list(commands.values())
 
 
+def run_command(command: List[str]):
+    logging.info(" ".join(command))
+    subprocess.run(command)
+
+
 def main(mapfile: str, cmd: str, args: List[str]):
+    # FIXME: if providing full path to executable
+    logfile = f"{cmd}_commands.log"
+    logging.basicConfig(
+        filename=logfile,
+        level=logging.INFO,
+        format="[%(asctime)s] %(levelname)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
     vararg_map = read_mapfile(mapfile)
     varargs, constargs = split_args(args)
 
     constargs.insert(0, cmd)
 
     if len(vararg_map) != len(varargs):
-        raise RuntimeError(
-            "Number of variable args passed does not equal the number of columns in the mapfile."
-        )
+        msg = "Number of variable args passed does not equal the number of columns in the mapfile."
+        logging.error(msg)
+        raise RuntimeError(msg)
 
     column2flag = map_headers_to_flag(varargs)
     commands = get_commands_list(vararg_map, constargs, column2flag)
 
-    for command in commands:
-        print(" ".join(command))
-        subprocess.run(command)
+    # SEQUENTIAL VERSION
+    # for command in commands:
+    #     run_command(command)
+
+    # PARALLEL VERSION
+
+    # TODO: add args to specify number of parallel workers
+    # TODO: add args to specify what the flag for the specific tool's cpu arg is
+    jobs = min(10, len(commands), (os.cpu_count() - 10))
+    with multiprocessing.Pool(processes=jobs) as pool:
+        #### DO STUFF ONLY WITHIN PROCESS POOL
+        pool.map(run_command, commands)
+
+        ## USED FOR FUNCS WITH MULTIPLE ARGS
+        # pool.starmap(
+        #     get_commands_list,
+        #     zip(ARGS1, ARGS2, ARGS2)
+        # )
+
+    # PROCESS POOL DELETED
 
     ### OPTIONAL
-    # 3) log all the commands that actually get ran
+    # 3) [X] log all the commands that actually get ran
     # 4) parallelized processing? prob useful with new server
     # 4a) subset is to parallelize with jobs that don't already do multiprocessing
     # 5) make a config file maker
