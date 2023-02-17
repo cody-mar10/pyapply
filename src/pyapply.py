@@ -8,6 +8,37 @@ from collections import defaultdict
 from typing import DefaultDict, Dict, List, Tuple
 
 
+def parse_args() -> Tuple[argparse.Namespace, List[str]]:
+    usage_msg = (
+        "usage: pyapply.py [-h] mapfile cmd [OPTIONS (-i{VARARG} -c/--CONSTARG)]"
+    )
+    description = (
+        "apply any command/script to a set of variable inputs in the `mapfile`\n\n"
+        "VARIABLE ARGS:\n\tall variable args that are specified in the mapfile must be delivered to the\n"
+        "\tcommand line like this: -i{input} where the `-i` is the flag for the command\n"
+        "\tand the {input} part specifies the header in the mapfile. Note there is no space.\n"
+        "CONSTANT ARGS:\n\tall constant args (args that are the same for each command) can be supplied\n"
+        "\tas if they were being directly passed to the command (ie --threads 10)\n"
+        "\tusing the flag that is required by the command.\n"
+        "EXAMPLE:\n\tThis uses the built-in unix command `ls`:\n\t"
+        "pyapply.py mapfile ls {input} -laFGH\n"
+        "\nFinally, the order matters! The command must be in this order:\n"
+        "pyapply.py mapfile cmd [OPTIONS]"
+    )
+    parser = argparse.ArgumentParser(
+        usage=usage_msg,
+        description=description,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "mapfile",
+        help="tab-delimited file that has the variable arg values, where each column has a header that matches the {values} passed on the command line",
+    )
+    parser.add_argument("cmd", help="path to an executable")
+
+    return parser.parse_known_args()
+
+
 def read_mapfile(mapfile: str) -> DefaultDict[str, List[str]]:
     """Read the `mapfile` into a dictionary to map the column names
     to specific value instances. The `mapfile` needs to be in the format:
@@ -121,7 +152,11 @@ def run_command(command: List[str]):
     subprocess.run(command)
 
 
-def main(mapfile: str, cmd: str, args: List[str]):
+def main():
+    config, args = parse_args()
+    mapfile: str = config.mapfile
+    cmd: str = config.cmd
+
     # FIXME: if providing full path to executable
     logfile = f"{cmd}_commands.log"
     logging.basicConfig(
@@ -175,32 +210,4 @@ def main(mapfile: str, cmd: str, args: List[str]):
 
 # were running this script from the command line
 if __name__ == "__main__":
-    usage_msg = (
-        "usage: pyapply.py [-h] mapfile cmd [OPTIONS (-i{VARARG} -c/--CONSTARG)]"
-    )
-    description = (
-        "apply any command/script to a set of variable inputs in the `mapfile`\n\n"
-        "VARIABLE ARGS:\n\tall variable args that are specified in the mapfile must be delivered to the\n"
-        "\tcommand line like this: -i{input} where the `-i` is the flag for the command\n"
-        "\tand the {input} part specifies the header in the mapfile. Note there is no space.\n"
-        "CONSTANT ARGS:\n\tall constant args (args that are the same for each command) can be supplied\n"
-        "\tas if they were being directly passed to the command (ie --threads 10)\n"
-        "\tusing the flag that is required by the command.\n"
-        "EXAMPLE:\n\tThis uses the built-in unix command `ls`:\n\t"
-        "pyapply.py mapfile ls {input} -laFGH\n"
-        "\nFinally, the order matters! The command must be in this order:\n"
-        "pyapply.py mapfile cmd [OPTIONS]"
-    )
-    parser = argparse.ArgumentParser(
-        usage=usage_msg,
-        description=description,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument(
-        "mapfile",
-        help="tab-delimited file that has the variable arg values, where each column has a header that matches the {values} passed on the command line",
-    )
-    parser.add_argument("cmd", help="path to an executable")
-
-    config, args = parser.parse_known_args()
-    main(mapfile=config.mapfile, cmd=config.cmd, args=args)
+    main()
