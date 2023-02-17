@@ -1,9 +1,0 @@
-LICENSE
-README.md
-pyproject.toml
-src/pyapply.py
-src/pyapply.egg-info/PKG-INFO
-src/pyapply.egg-info/SOURCES.txt
-src/pyapply.egg-info/dependency_links.txt
-src/pyapply.egg-info/entry_points.txt
-src/pyapply.egg-info/top_level.txt
