@@ -35,6 +35,15 @@ def parse_args() -> Tuple[argparse.Namespace, List[str]]:
         help="tab-delimited file that has the variable arg values, where each column has a header that matches the {values} passed on the command line",
     )
     parser.add_argument("cmd", help="path to an executable")
+    parser.add_argument(
+        "--py-maxcpus",
+        type=int,
+        default=-1,
+        help="max number of cpus to use overall with parallelization (default: %(default)s = run sequentially)",
+    )
+    parser.add_argument(
+        "--py-cpuarg", help="cmd flag for controlling multithreading/multiprocessing"
+    )
 
     return parser.parse_known_args()
 
@@ -147,6 +156,20 @@ def get_commands_list(
     return list(commands.values())
 
 
+def parse_cmd_cpu(constargs: List[str], cpu_arg: str) -> int:
+    try:
+        cmd_cpu_idx = constargs.index(cpu_arg) + 1
+        cmd_cpu = int(constargs[cmd_cpu_idx])
+    except ValueError:
+        # cpu_arg is not in constargs
+        logging.info(
+            f"{cpu_arg} not found as a constant arg. Setting cpu usage per job to be 1"
+        )
+        cmd_cpu = 1
+
+    return cmd_cpu
+
+
 def run_command(command: List[str]):
     logging.info(" ".join(command))
     subprocess.run(command)
@@ -156,6 +179,8 @@ def main():
     config, args = parse_args()
     mapfile: str = config.mapfile
     cmd: str = config.cmd
+    max_cpus: int = config.py_maxcpus
+    cpu_arg = config.py_cpuarg
 
     # FIXME: if providing full path to executable
     logfile = f"{cmd}_commands.log"
@@ -178,32 +203,26 @@ def main():
 
     column2flag = map_headers_to_flag(varargs)
     commands = get_commands_list(vararg_map, constargs, column2flag)
+    if max_cpus == -1:
+        # SEQUENTIAL
+        for command in commands:
+            run_command(command)
+    elif max_cpus > 1:
+        if cpu_arg is not None:
+            # placeholder before we parse this value
+            cmd_cpus = parse_cmd_cpu(constargs, cpu_arg)
+        else:
+            cmd_cpus = 1
 
-    # SEQUENTIAL VERSION
-    # for command in commands:
-    #     run_command(command)
-
-    # PARALLEL VERSION
-
-    # TODO: add args to specify number of parallel workers
-    # TODO: add args to specify what the flag for the specific tool's cpu arg is
-    jobs = min(10, len(commands), (os.cpu_count() - 10))
-    with multiprocessing.Pool(processes=jobs) as pool:
-        #### DO STUFF ONLY WITHIN PROCESS POOL
-        pool.map(run_command, commands)
-
-        ## USED FOR FUNCS WITH MULTIPLE ARGS
-        # pool.starmap(
-        #     get_commands_list,
-        #     zip(ARGS1, ARGS2, ARGS2)
-        # )
-
-    # PROCESS POOL DELETED
+        if max_cpus < cmd_cpus:
+            # DEFAULTS BACK TO SEQUENTIAL
+            jobs = 1
+        else:
+            jobs = max_cpus // cmd_cpus
+        with multiprocessing.Pool(processes=jobs) as pool:
+            pool.map(run_command, commands)
 
     ### OPTIONAL
-    # 3) [X] log all the commands that actually get ran
-    # 4) parallelized processing? prob useful with new server
-    # 4a) subset is to parallelize with jobs that don't already do multiprocessing
     # 5) make a config file maker
     # 5a) can unpack wildcards with pathlib or glob
 
