@@ -2,16 +2,26 @@
 import argparse
 import logging
 import multiprocessing
-import os
 import subprocess
+import sys
 from collections import defaultdict
-from typing import DefaultDict, Dict, List, Tuple
+from dataclasses import dataclass
+from pathlib import Path
+from typing import DefaultDict, Dict, List, Optional, Tuple
 
 
-def parse_args() -> Tuple[argparse.Namespace, List[str]]:
-    usage_msg = (
-        "usage: pyapply.py [-h] mapfile cmd [OPTIONS (-i{VARARG} -c/--CONSTARG)]"
-    )
+@dataclass
+class Args:
+    mapfile: Path
+    cmd: Path
+    max_cpus: int
+    cpu_arg: Optional[str]
+    cpu_one: bool
+    cmd_args: List[str]
+
+
+def parse_args() -> Args:
+    usage_msg = "pyapply.py [-h] mapfile cmd [OPTIONS (-i{VARARG} -c/--CONSTARG)]"
     description = (
         "apply any command/script to a set of variable inputs in the `mapfile`\n\n"
         "VARIABLE ARGS:\n\tall variable args that are specified in the mapfile must be delivered to the\n"
@@ -30,25 +40,47 @@ def parse_args() -> Tuple[argparse.Namespace, List[str]]:
         description=description,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+
+    cpu_flag_args = parser.add_argument_group(
+        "CPU ARG -- ONE REQUIRED WITH --py-maxcpus"
+    ).add_mutually_exclusive_group(required="--py-maxcpus" in sys.argv)
+
     parser.add_argument(
         "mapfile",
+        type=Path,
         help="tab-delimited file that has the variable arg values, where each column has a header that matches the {values} passed on the command line",
     )
-    parser.add_argument("cmd", help="path to an executable")
+    parser.add_argument("cmd", type=Path, help="path to an executable")
     parser.add_argument(
         "--py-maxcpus",
         type=int,
+        metavar="INT",
         default=-1,
         help="max number of cpus to use overall with parallelization (default: %(default)s = run sequentially)",
     )
-    parser.add_argument(
-        "--py-cpuarg", help="cmd flag for controlling multithreading/multiprocessing"
+    cpu_flag_args.add_argument(
+        "--py-cpuarg",
+        metavar="FLAG",
+        help="cmd flag for controlling multithreading/multiprocessing. USAGE: --py-cpuarg=FLAG -- since the argument will usually start with a '-', you must use the '=' sign. If cmd can only use 1 CPU and you want to run it in parallel, use --py-onecpu.",
+    )
+    cpu_flag_args.add_argument(
+        "--py-cpuone",
+        action="store_true",
+        help="use if cmd can only use 1 cpu with no option to change",
     )
 
-    return parser.parse_known_args()
+    config, args = parser.parse_known_args()
+    return Args(
+        mapfile=config.mapfile,
+        cmd=config.cmd,
+        max_cpus=config.py_maxcpus,
+        cpu_arg=config.py_cpuarg,
+        cpu_one=config.py_cpuone,
+        cmd_args=args,
+    )
 
 
-def read_mapfile(mapfile: str) -> DefaultDict[str, List[str]]:
+def read_mapfile(mapfile: Path) -> DefaultDict[str, List[str]]:
     """Read the `mapfile` into a dictionary to map the column names
     to specific value instances. The `mapfile` needs to be in the format:
 
@@ -63,7 +95,7 @@ def read_mapfile(mapfile: str) -> DefaultDict[str, List[str]]:
     `-v1{VARARG1} -v2{VARARG2}`
 
     Args:
-        mapfile (str): tab-delimited file that maps variable arguments to
+        mapfile (Path): tab-delimited file that maps variable arguments to
             specific values
 
     Returns:
@@ -71,7 +103,7 @@ def read_mapfile(mapfile: str) -> DefaultDict[str, List[str]]:
             values for that specific arg. Each item in the list represents a single
     """
     logging.info(f"Reading mapfile: {mapfile}")
-    with open(mapfile) as fp:
+    with mapfile.open() as fp:
         header = fp.readline().rstrip().split("\t")
         vararg_map: DefaultDict[str, List[str]] = defaultdict(list)
         for line in fp:
@@ -162,28 +194,34 @@ def parse_cmd_cpu(constargs: List[str], cpu_arg: str) -> int:
         cmd_cpu = int(constargs[cmd_cpu_idx])
     except ValueError:
         # cpu_arg is not in constargs
-        logging.info(
-            f"{cpu_arg} not found as a constant arg. Setting cpu usage per job to be 1"
+        logging.warning(
+            f"{cpu_arg} not found as a constant arg. Setting cpu usage per job to be 1. If your job can only use 1 cpu, then ignore this warning."
         )
         cmd_cpu = 1
 
     return cmd_cpu
 
 
-def run_command(command: List[str]):
-    logging.info(" ".join(command))
-    subprocess.run(command)
+def run_command(job_id: int, command: List[str]):
+    cmd_str = " ".join(command)
+    logging.info(f"JOB {job_id}: {cmd_str}")
+    try:
+        subprocess.run(command, check=True, capture_output=True)
+    except subprocess.CalledProcessError as err:
+        logging.error(f"JOB {job_id}: {err.stderr.decode().rstrip()}")
+    else:
+        logging.info(f"JOB {job_id}: Ran sucessfully")
 
 
 def main():
-    config, args = parse_args()
-    mapfile: str = config.mapfile
-    cmd: str = config.cmd
-    max_cpus: int = config.py_maxcpus
-    cpu_arg = config.py_cpuarg
+    args = parse_args()
+    mapfile = args.mapfile
+    cmd = args.cmd
+    max_cpus = args.max_cpus
+    cpu_arg = args.cpu_arg
+    cpu_one = args.cpu_one
 
-    # FIXME: if providing full path to executable
-    logfile = f"{cmd}_commands.log"
+    logfile = f"{cmd.stem}_commands.log"
     logging.basicConfig(
         filename=logfile,
         level=logging.INFO,
@@ -192,9 +230,9 @@ def main():
     )
 
     vararg_map = read_mapfile(mapfile)
-    varargs, constargs = split_args(args)
+    varargs, constargs = split_args(args.cmd_args)
 
-    constargs.insert(0, cmd)
+    constargs.insert(0, cmd.as_posix())
 
     if len(vararg_map) != len(varargs):
         msg = "Number of variable args passed does not equal the number of columns in the mapfile."
@@ -203,30 +241,31 @@ def main():
 
     column2flag = map_headers_to_flag(varargs)
     commands = get_commands_list(vararg_map, constargs, column2flag)
-    if max_cpus == -1:
-        # SEQUENTIAL
-        for command in commands:
-            run_command(command)
-    elif max_cpus > 1:
-        if cpu_arg is not None:
-            # placeholder before we parse this value
-            cmd_cpus = parse_cmd_cpu(constargs, cpu_arg)
-        else:
-            cmd_cpus = 1
+    n_tasks = len(commands)
 
-        if max_cpus < cmd_cpus:
-            # DEFAULTS BACK TO SEQUENTIAL
-            jobs = 1
-        else:
-            jobs = max_cpus // cmd_cpus
+    if cpu_one:
+        # JOB only uses 1 CPU by default
+        cmd_cpus = 1
+    elif cpu_arg is not None:
+        cmd_cpus = parse_cmd_cpu(constargs, cpu_arg)
+    else:
+        # --py-cpuarg was not supplied with --py-maxcpus
+        # forces running to go back to sequential mode
+        cmd_cpus = max_cpus
+
+    if max_cpus <= cmd_cpus:
+        # DEFAULTS BACK TO SEQUENTIAL
+        # This is basically the default state
+        logging.info(f"Running {n_tasks} tasks sequentially")
+        for job_id, command in enumerate(commands):
+            run_command(job_id, command)
+    else:
+        # PARALLEL BLOCK
+        jobs = max_cpus // cmd_cpus
+        logging.info(f"Running {n_tasks} tasks in parallel batches of {jobs}")
         with multiprocessing.Pool(processes=jobs) as pool:
-            pool.map(run_command, commands)
-
-    ### OPTIONAL
-    # 5) make a config file maker
-    # 5a) can unpack wildcards with pathlib or glob
+            pool.starmap(run_command, enumerate(commands))
 
 
-# were running this script from the command line
 if __name__ == "__main__":
     main()
