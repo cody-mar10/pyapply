@@ -206,7 +206,7 @@ def run_command(job_id: int, command: List[str]):
     cmd_str = " ".join(command)
     logging.info(f"JOB {job_id}: {cmd_str}")
     try:
-        subprocess.run(command, check=True, capture_output=True)
+        subprocess.check_output(command)
     except subprocess.CalledProcessError as err:
         logging.error(f"JOB {job_id}: {err.stderr.decode().rstrip()}")
     else:
