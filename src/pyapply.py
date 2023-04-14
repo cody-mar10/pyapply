@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 import argparse
 import logging
+import json
 import multiprocessing
 import subprocess
 import sys
+import time
 from collections import defaultdict
 from dataclasses import dataclass
+from multiprocessing import Lock
+from multiprocessing.synchronize import Lock as LockType
+from itertools import repeat
 from pathlib import Path
 from typing import DefaultDict, Dict, List, Optional, Tuple
 
@@ -18,6 +23,7 @@ class Args:
     cpu_arg: Optional[str]
     cpu_one: bool
     cmd_args: List[str]
+    tmpdir: Path
 
 
 def parse_args() -> Args:
@@ -52,6 +58,13 @@ def parse_args() -> Args:
     )
     parser.add_argument("cmd", type=Path, help="path to an executable")
     parser.add_argument(
+        "--py-tempdir",
+        type=Path,
+        metavar="DIR",
+        default=Path.cwd().joinpath(".pyapplytmp"),
+        help="temp directory, used to save previous runs (default: %(default)s)",
+    )
+    parser.add_argument(
         "--py-maxcpus",
         type=int,
         metavar="INT",
@@ -77,6 +90,7 @@ def parse_args() -> Args:
         cpu_arg=config.py_cpuarg,
         cpu_one=config.py_cpuone,
         cmd_args=args,
+        tmpdir=config.py_tempdir,
     )
 
 
@@ -150,9 +164,12 @@ def map_headers_to_flag(varargs: List[str]) -> Dict[str, str]:
     """
     column2flag: Dict[str, str] = dict()
     for arg in varargs:
+        # CHANGE to accomodate positional variable args
+        # TODO: technically does only if the config file has the same order as the commands
         flag, column = arg.split("{")
         column = column.replace("}", "")
         column2flag[column] = flag
+
     return column2flag
 
 
@@ -181,6 +198,7 @@ def get_commands_list(
     for colname, values in vararg_map.items():
         flag = column2flag[colname]
         for idx, value in enumerate(values):
+            # TODO: prob change to semicolon or add arg
             value = value.split(",")
             commands[idx].append(flag)
             commands[idx].extend(value)
@@ -202,15 +220,39 @@ def parse_cmd_cpu(constargs: List[str], cpu_arg: str) -> int:
     return cmd_cpu
 
 
-def run_command(job_id: int, command: List[str]):
+def write_status_log(job2status: Dict[str, bool], status_file: Path):
+    with lock:
+        with status_file.open("w") as fp:
+            json.dump(job2status, fp, indent=4)
+
+
+def run_command(
+    job_id: int,
+    command: List[str],
+    job2status: Dict[str, bool],
+    status_file: Path,
+):
     cmd_str = " ".join(command)
     logging.info(f"JOB {job_id}: {cmd_str}")
-    try:
-        subprocess.check_output(command)
-    except subprocess.CalledProcessError as err:
-        logging.error(f"JOB {job_id}: {err.stderr.decode().rstrip()}")
+    if not job2status[cmd_str]:
+        # run job bc hasn't ran
+        try:
+            subprocess.check_output(command)
+        except subprocess.CalledProcessError as err:
+            logging.error(f"JOB {job_id}: {err.stderr.decode().rstrip()}")
+            time.sleep(60)
+            raise err
+        else:
+            logging.info(f"JOB {job_id}: Ran sucessfully")
+            job2status[cmd_str] = True
+            write_status_log(job2status, status_file)
     else:
-        logging.info(f"JOB {job_id}: Ran sucessfully")
+        logging.info(f"JOB {job_id}: Already ran -- skipping.")
+
+
+def init_process_pool(input_lock: LockType):
+    global lock
+    lock = input_lock
 
 
 def main():
@@ -220,6 +262,9 @@ def main():
     max_cpus = args.max_cpus
     cpu_arg = args.cpu_arg
     cpu_one = args.cpu_one
+    tmpdir = args.tmpdir
+    tmpdir.mkdir(exist_ok=True)
+    status_file = tmpdir.joinpath(".status")
 
     logfile = f"{cmd.stem}_commands.log"
     logging.basicConfig(
@@ -253,18 +298,41 @@ def main():
         # forces running to go back to sequential mode
         cmd_cpus = max_cpus
 
+    lock = Lock()
+    ## This is for checkpointing individual jobs
+    if not status_file.exists():
+        job2status = dict()
+        for command in commands:
+            cmd_str = " ".join(command)
+            job2status[cmd_str] = False
+    else:
+        with status_file.open() as fp:
+            job2status = json.load(fp)
+
     if max_cpus <= cmd_cpus:
         # DEFAULTS BACK TO SEQUENTIAL
         # This is basically the default state
+        jobs = 1
         logging.info(f"Running {n_tasks} tasks sequentially")
-        for job_id, command in enumerate(commands):
-            run_command(job_id, command)
     else:
         # PARALLEL BLOCK
         jobs = max_cpus // cmd_cpus
         logging.info(f"Running {n_tasks} tasks in parallel batches of {jobs}")
-        with multiprocessing.Pool(processes=jobs) as pool:
-            pool.starmap(run_command, enumerate(commands))
+
+    with multiprocessing.Pool(
+        processes=jobs,
+        initializer=init_process_pool,
+        initargs=(lock,),
+    ) as pool:
+        pool.starmap(
+            run_command,
+            zip(
+                range(len(commands)),
+                commands,
+                repeat(job2status),
+                repeat(status_file),
+            ),
+        )
 
 
 if __name__ == "__main__":
